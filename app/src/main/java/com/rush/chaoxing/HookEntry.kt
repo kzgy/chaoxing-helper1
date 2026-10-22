@@ -2,9 +2,9 @@ package com.rush.chaoxing
 
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
 import com.highcapable.yukihookapi.hook.factory.*
+import com.highcapable.yukihookapi.hook.log.YLog
 import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -24,11 +24,14 @@ class HookEntry : IYukiHookXposedInit {
     }
 
     override fun onInit() = configs {
-        isDebug = false
+        // 开启调试模式，让日志能直接推送到 LSPosed 界面
+        isDebug = true
     }
 
     override fun onHook() = encase {
         loadApp(name = "com.chaoxing.mobile") {
+            YLog.info(TAG, "已成功挂载到学习通主进程: $processName")
+
             val targetClassName = "okhttp3.OkHttpClient" + "$" + "Builder"
             targetClassName.toClass().method {
                 name = "build"
@@ -36,7 +39,7 @@ class HookEntry : IYukiHookXposedInit {
                 before {
                     val builder = instance as OkHttpClient.Builder
                     builder.addInterceptor(RushInterceptor())
-                    Log.i(TAG, "抢答拦截器已注入")
+                    YLog.info(TAG, "抢答拦截器已注入")
                 }
             }
         }
@@ -56,7 +59,7 @@ class RushInterceptor : Interceptor {
                 val json = peek.string()
                 parseActiveList(json, request)
             } catch (e: Throwable) {
-                Log.e(HookEntry.TAG, "解析失败", e)
+                YLog.error(TAG, "解析失败: ${e.message}")
             }
         }
 
@@ -77,6 +80,7 @@ class RushInterceptor : Interceptor {
                 HookEntry.handledActiveIds.add(activeId)
 
                 val randomDelay = Random.nextLong(200, 380)
+                YLog.info(HookEntry.TAG, "捕获到抢答活动: $activeId，将在 ${randomDelay}ms 后抢答")
                 HookEntry.mainHandler.postDelayed({
                     doRush(activeId, templateRequest)
                 }, randomDelay)
@@ -94,9 +98,11 @@ class RushInterceptor : Interceptor {
                     .get()
                     .build()
 
-                OkHttpClient().newCall(rushRequest).execute().close()
+                val resp = OkHttpClient().newCall(rushRequest).execute()
+                YLog.info(HookEntry.TAG, "抢答请求已发出，响应码: ${resp.code}")
+                resp.close()
             } catch (e: Throwable) {
-                Log.e(HookEntry.TAG, "请求异常", e)
+                YLog.error(HookEntry.TAG, "请求异常: ${e.message}")
             }
         }.start()
     }
