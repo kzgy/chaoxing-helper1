@@ -1,4 +1,4 @@
-﻿pluginManagement {
+pluginManagement {
     repositories {
         google()
         mavenCentral()
@@ -11,7 +11,9 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven { url = java.net.URI("https://jitpack.io") }
+        maven { url = java.net.URI("https://api.xposed.info/") }
     }
 }
+
 rootProject.name = "ChaoxingRush"
 include(":app")
