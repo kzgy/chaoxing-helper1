@@ -1,7 +1,5 @@
 package com.rush.chaoxing
 
-import android.os.Handler
-import android.os.Looper
 import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
 import com.highcapable.yukihookapi.hook.factory.*
 import com.highcapable.yukihookapi.hook.log.YLog
@@ -19,14 +17,12 @@ class HookEntry : IYukiHookXposedInit {
 
     companion object {
         val handledActiveIds = ConcurrentHashMap.newKeySet<String>()
-        val mainHandler = Handler(Looper.getMainLooper())
     }
 
     override fun onInit() {
         configs {
             isDebug = true
         }
-        // 全局设置 Yuki 日志标签
         YLog.Configs.tag = "ChaoxingRush"
     }
 
@@ -83,29 +79,34 @@ class RushInterceptor : Interceptor {
 
                 val randomDelay = Random.nextLong(200, 380)
                 YLog.info("捕获到抢答活动: $activeId，将在 ${randomDelay}ms 后抢答")
-                HookEntry.mainHandler.postDelayed({
-                    doRush(activeId, templateRequest)
-                }, randomDelay)
+
+                // 在独立子线程等待并执行，不依赖主线程 Looper
+                Thread {
+                    try {
+                        Thread.sleep(randomDelay)
+                        doRush(activeId, templateRequest)
+                    } catch (e: Throwable) {
+                        YLog.error("抢答定时执行异常", e)
+                    }
+                }.start()
             }
         }
     }
 
     private fun doRush(activeId: String, templateRequest: Request) {
-        Thread {
-            try {
-                val targetUrl = "https://mobilelearn.chaoxing.com/widget/responder/join?activeId=$activeId"
-                val rushRequest = Request.Builder()
-                    .url(targetUrl)
-                    .headers(templateRequest.headers)
-                    .get()
-                    .build()
+        try {
+            val targetUrl = "https://mobilelearn.chaoxing.com/widget/responder/join?activeId=$activeId"
+            val rushRequest = Request.Builder()
+                .url(targetUrl)
+                .headers(templateRequest.headers)
+                .get()
+                .build()
 
-                val resp = OkHttpClient().newCall(rushRequest).execute()
-                YLog.info("抢答请求已发出，响应码: ${resp.code}")
-                resp.close()
-            } catch (e: Throwable) {
-                YLog.error("抢答请求发送异常", e)
-            }
-        }.start()
+            val resp = OkHttpClient().newCall(rushRequest).execute()
+            YLog.info("抢答请求已发出，响应码: ${resp.code}")
+            resp.close()
+        } catch (e: Throwable) {
+            YLog.error("抢答请求发送异常", e)
+        }
     }
 }
