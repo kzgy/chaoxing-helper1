@@ -4,8 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
-import com.highcapable.yukihookapi.hook.factory.configs
-import com.highcapable.yukihookapi.hook.factory.encase
+import com.highcapable.yukihookapi.hook.factory.*
 import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -30,7 +29,6 @@ class HookEntry : IYukiHookXposedInit {
 
     override fun onHook() = encase {
         loadApp(name = "com.chaoxing.mobile") {
-            // 用字符串拼接避开 Kotlin 内部类转义解析问题
             val targetClassName = "okhttp3.OkHttpClient" + "$" + "Builder"
             targetClassName.toClass().method {
                 name = "build"
