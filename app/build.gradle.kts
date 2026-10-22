@@ -3,9 +3,11 @@
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp")
 }
+
 android {
     namespace = "com.rush.chaoxing"
     compileSdk = 34
+
     defaultConfig {
         applicationId = "com.rush.chaoxing"
         minSdk = 26
@@ -13,12 +15,21 @@ android {
         versionCode = 1
         versionName = "1.0"
     }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 }
+
 dependencies {
     compileOnly("com.highcapable.yukihookapi:api:1.2.1")
     ksp("com.highcapable.yukihookapi:ksp-xposed:1.2.1")
