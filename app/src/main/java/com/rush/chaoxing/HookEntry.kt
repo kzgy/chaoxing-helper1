@@ -4,11 +4,11 @@ import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
 import com.highcapable.yukihookapi.hook.factory.*
 import com.highcapable.yukihookapi.hook.log.YLog
 import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
-import okhttp3.Interceptor
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
 import org.json.JSONObject
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Proxy
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
@@ -35,36 +35,95 @@ class HookEntry : IYukiHookXposedInit {
                 name = "build"
             }.hook {
                 before {
-                    val builder = instance as OkHttpClient.Builder
-                    builder.addInterceptor(RushInterceptor())
-                    YLog.info("抢答拦截器已注入")
+                    try {
+                        val hostClassLoader = instance.javaClass.classLoader ?: appClassLoader ?: return@before
+                        injectDynamicInterceptor(instance, hostClassLoader)
+                    } catch (e: Throwable) {
+                        YLog.error("拦截器挂载异常", e)
+                    }
                 }
             }
         }
     }
-}
 
-class RushInterceptor : Interceptor {
+    private fun injectDynamicInterceptor(builderInstance: Any, hostClassLoader: ClassLoader) {
+        val interceptorClass = hostClassLoader.loadClass("okhttp3.Interceptor")
 
-    override fun intercept(chain: Interceptor.Chain): Response {
-        val request = chain.request()
-        val response = chain.proceed(request)
-        val url = request.url.toString()
-
-        if (url.contains("taskactivelist")) {
-            try {
-                val peek = response.peekBody(1024 * 512)
-                val json = peek.string()
-                parseActiveList(json, request)
-            } catch (e: Throwable) {
-                YLog.error("解析活动列表失败", e)
+        // 使用宿主 ClassLoader 动态创建 Interceptor 代理
+        val proxyInterceptor = Proxy.newProxyInstance(
+            hostClassLoader,
+            arrayOf(interceptorClass)
+        ) { _, method, args ->
+            if (method.name == "intercept" && args != null && args.isNotEmpty()) {
+                val chain = args[0]
+                try {
+                    return@newProxyInstance handleIntercept(chain)
+                } catch (e: InvocationTargetException) {
+                    throw e.targetException
+                }
             }
+            if (method.name == "equals") return@newProxyInstance args?.get(0) === builderInstance
+            if (method.name == "hashCode") return@newProxyInstance 114514
+            if (method.name == "toString") return@newProxyInstance "DynamicRushInterceptor"
+            null
+        }
+
+        // builder.addInterceptor(proxyInterceptor)
+        val addInterceptorMethod = builderInstance.javaClass.getMethod("addInterceptor", interceptorClass)
+        addInterceptorMethod.invoke(builderInstance, proxyInterceptor)
+        YLog.info("抢答拦截器已动态注入 OkHttpClient")
+    }
+
+    private fun handleIntercept(chain: Any): Any {
+        val requestMethod = chain.javaClass.getMethod("request")
+        val request = requestMethod.invoke(chain) ?: throw IllegalStateException("Request is null")
+
+        val proceedMethod = chain.javaClass.getMethod("proceed", request.javaClass)
+        val response = proceedMethod.invoke(chain, request) ?: throw IllegalStateException("Response is null")
+
+        try {
+            val urlObj = request.javaClass.getMethod("url").invoke(request)
+            val url = urlObj?.toString() ?: ""
+
+            if (url.contains("taskactivelist")) {
+                YLog.info("捕获到课堂活动列表请求: $url")
+                val peekBodyMethod = response.javaClass.getMethod("peekBody", Long::class.javaPrimitiveType)
+                val responseBody = peekBodyMethod.invoke(response, 512L * 1024L)
+                val stringMethod = responseBody.javaClass.getMethod("string")
+                val jsonStr = stringMethod.invoke(responseBody) as String
+
+                val headersMap = extractHeaders(request)
+                parseActiveList(jsonStr, headersMap)
+            }
+        } catch (e: Throwable) {
+            YLog.error("活动数据拦截解析异常", e)
         }
 
         return response
     }
 
-    private fun parseActiveList(jsonStr: String, templateRequest: Request) {
+    private fun extractHeaders(request: Any): Map<String, String> {
+        val headerMap = HashMap<String, String>()
+        try {
+            val headersObj = request.javaClass.getMethod("headers").invoke(request) ?: return headerMap
+            val namesMethod = headersObj.javaClass.getMethod("names")
+            val names = namesMethod.invoke(headersObj) as? Set<*> ?: return headerMap
+            val getHeaderMethod = request.javaClass.getMethod("header", String::class.java)
+
+            for (name in names) {
+                val key = name.toString()
+                val value = getHeaderMethod.invoke(request, key) as? String
+                if (value != null) {
+                    headerMap[key] = value
+                }
+            }
+        } catch (e: Throwable) {
+            YLog.error("提取请求头失败", e)
+        }
+        return headerMap
+    }
+
+    private fun parseActiveList(jsonStr: String, headersMap: Map<String, String>) {
         val root = JSONObject(jsonStr)
         val activeList = root.optJSONArray("activeList") ?: return
 
@@ -74,39 +133,56 @@ class RushInterceptor : Interceptor {
             val status = item.optInt("status")
             val activeId = item.optString("id")
 
-            if (activeType == 4 && status == 1 && !HookEntry.handledActiveIds.contains(activeId)) {
-                HookEntry.handledActiveIds.add(activeId)
+            // activeType == 4: 抢答活动; status == 1: 进行中
+            if (activeType == 4 && status == 1 && !handledActiveIds.contains(activeId)) {
+                handledActiveIds.add(activeId)
 
                 val randomDelay = Random.nextLong(200, 380)
-                YLog.info("捕获到抢答活动: $activeId，将在 ${randomDelay}ms 后抢答")
+                YLog.info("捕获到抢答活动 ID: $activeId，将在 ${randomDelay}ms 后抢答")
 
-                // 在独立子线程等待并执行，不依赖主线程 Looper
                 Thread {
                     try {
                         Thread.sleep(randomDelay)
-                        doRush(activeId, templateRequest)
+                        doRush(activeId, headersMap)
                     } catch (e: Throwable) {
-                        YLog.error("抢答定时执行异常", e)
+                        YLog.error("抢答定时线程执行异常", e)
                     }
                 }.start()
             }
         }
     }
 
-    private fun doRush(activeId: String, templateRequest: Request) {
+    private fun doRush(activeId: String, headersMap: Map<String, String>) {
         try {
             val targetUrl = "https://mobilelearn.chaoxing.com/widget/responder/join?activeId=$activeId"
-            val rushRequest = Request.Builder()
-                .url(targetUrl)
-                .headers(templateRequest.headers)
-                .get()
-                .build()
+            val url = URL(targetUrl)
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 5000
+                readTimeout = 5000
+                useCaches = false
+                instanceFollowRedirects = true
+                for ((k, v) in headersMap) {
+                    // 过滤掉自管理字段，保证编码透明解压
+                    if (!k.equals("Host", ignoreCase = true) &&
+                        !k.equals("Content-Length", ignoreCase = true) &&
+                        !k.equals("Accept-Encoding", ignoreCase = true)
+                    ) {
+                        setRequestProperty(k, v)
+                    }
+                }
+            }
 
-            val resp = OkHttpClient().newCall(rushRequest).execute()
-            YLog.info("抢答请求已发出，响应码: ${resp.code}")
-            resp.close()
+            val respCode = conn.responseCode
+            val respText = try {
+                conn.inputStream.bufferedReader().use { it.readText() }
+            } catch (e: Throwable) {
+                conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+            }
+            YLog.info("抢答发包完成 -> 响应码: $respCode, 返回结果: $respText")
+            conn.disconnect()
         } catch (e: Throwable) {
-            YLog.error("抢答请求发送异常", e)
+            YLog.error("抢答发包请求异常", e)
         }
     }
 }
