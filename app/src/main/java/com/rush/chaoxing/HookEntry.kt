@@ -18,19 +18,21 @@ import kotlin.random.Random
 class HookEntry : IYukiHookXposedInit {
 
     companion object {
-        const val TAG = "ChaoxingRush"
         val handledActiveIds = ConcurrentHashMap.newKeySet<String>()
         val mainHandler = Handler(Looper.getMainLooper())
     }
 
-    override fun onInit() = configs {
-        // 开启调试模式，让日志能直接推送到 LSPosed 界面
-        isDebug = true
+    override fun onInit() {
+        configs {
+            isDebug = true
+        }
+        // 全局设置 Yuki 日志标签
+        YLog.Configs.tag = "ChaoxingRush"
     }
 
     override fun onHook() = encase {
         loadApp(name = "com.chaoxing.mobile") {
-            YLog.info(TAG, "已成功挂载到学习通主进程: $processName")
+            YLog.info("已成功挂载到学习通进程: $processName")
 
             val targetClassName = "okhttp3.OkHttpClient" + "$" + "Builder"
             targetClassName.toClass().method {
@@ -39,7 +41,7 @@ class HookEntry : IYukiHookXposedInit {
                 before {
                     val builder = instance as OkHttpClient.Builder
                     builder.addInterceptor(RushInterceptor())
-                    YLog.info(TAG, "抢答拦截器已注入")
+                    YLog.info("抢答拦截器已注入")
                 }
             }
         }
@@ -59,7 +61,7 @@ class RushInterceptor : Interceptor {
                 val json = peek.string()
                 parseActiveList(json, request)
             } catch (e: Throwable) {
-                YLog.error(TAG, "解析失败: ${e.message}")
+                YLog.error("解析活动列表失败", e)
             }
         }
 
@@ -80,7 +82,7 @@ class RushInterceptor : Interceptor {
                 HookEntry.handledActiveIds.add(activeId)
 
                 val randomDelay = Random.nextLong(200, 380)
-                YLog.info(HookEntry.TAG, "捕获到抢答活动: $activeId，将在 ${randomDelay}ms 后抢答")
+                YLog.info("捕获到抢答活动: $activeId，将在 ${randomDelay}ms 后抢答")
                 HookEntry.mainHandler.postDelayed({
                     doRush(activeId, templateRequest)
                 }, randomDelay)
@@ -99,10 +101,10 @@ class RushInterceptor : Interceptor {
                     .build()
 
                 val resp = OkHttpClient().newCall(rushRequest).execute()
-                YLog.info(HookEntry.TAG, "抢答请求已发出，响应码: ${resp.code}")
+                YLog.info("抢答请求已发出，响应码: ${resp.code}")
                 resp.close()
             } catch (e: Throwable) {
-                YLog.error(HookEntry.TAG, "请求异常: ${e.message}")
+                YLog.error("抢答请求发送异常", e)
             }
         }.start()
     }
